@@ -1,15 +1,16 @@
-cat > installer-full.sh <<'EOF'
+cat >/tmp/installer-full.sh <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="$HOME/telegram-ai-bot"
+APP_DIR="/opt/telegram-ai-bot"
 SERVICE_NAME="telegram-ai-bot"
 PY_BIN="$APP_DIR/.venv/bin/python"
-USER_NAME="$(whoami)"
+RUN_USER="${SUDO_USER:-$(whoami)}"
+NO_GIT="${1:-}"
 
-echo "==> Telegram AI Bot full installer (Ubuntu 24)"
+sudo mkdir -p "$APP_DIR"
+sudo chown -R "$RUN_USER:$RUN_USER" "$APP_DIR"
 
-mkdir -p "$APP_DIR"
 cd "$APP_DIR"
 mkdir -p bot deploy scripts storage/generated
 
@@ -40,15 +41,6 @@ MAX_SUMMARY_CHARS=4000
 LOG_LEVEL=INFO
 EOT
 
-cat > .gitignore << 'EOT'
-.venv/
-__pycache__/
-*.pyc
-.env
-storage/
-*.log
-EOT
-
 cat > bot/__init__.py << 'EOT'
 # package marker
 EOT
@@ -62,8 +54,7 @@ def _int_set_from_csv(value: str) -> set[int]:
     out: set[int] = set()
     for p in (value or "").split(","):
         p = p.strip()
-        if p:
-            out.add(int(p))
+        if p: out.add(int(p))
     return out
 @dataclass(frozen=True)
 class Settings:
@@ -281,50 +272,37 @@ def main():
 if __name__=="__main__": main()
 EOT
 
-cat > /tmp/${SERVICE_NAME}.service << EOT
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+
+cat >/tmp/${SERVICE_NAME}.service <<EOT
 [Unit]
 Description=Telegram AI Bot (Gemini)
 After=network.target
-
 [Service]
 Type=simple
-User=$USER_NAME
+User=$RUN_USER
 WorkingDirectory=$APP_DIR
 Environment=PYTHONUNBUFFERED=1
 ExecStart=$PY_BIN -m bot.main
 Restart=always
 RestartSec=5
-
 [Install]
 WantedBy=multi-user.target
 EOT
 
-echo "==> Installing OS deps"
-sudo apt update
-sudo apt install -y python3 python3-venv python3-pip git
-
-echo "==> Creating venv + installing Python deps"
-if [ ! -d .venv ]; then python3 -m venv .venv; fi
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-
-echo "==> Installing systemd service"
-sudo cp "/tmp/${SERVICE_NAME}.service" "/etc/systemd/system/${SERVICE_NAME}.service"
+sudo cp /tmp/${SERVICE_NAME}.service /etc/systemd/system/${SERVICE_NAME}.service
 sudo systemctl daemon-reload
-sudo systemctl enable "${SERVICE_NAME}"
-sudo systemctl restart "${SERVICE_NAME}"
+sudo systemctl enable ${SERVICE_NAME}
+sudo systemctl restart ${SERVICE_NAME}
 
-echo
-echo "✅ Done. Bot service is active."
-echo "Check status:"
-echo "sudo systemctl status ${SERVICE_NAME}"
-echo
-echo "Live logs:"
-echo "journalctl -u ${SERVICE_NAME} -f"
+echo "DONE"
+echo "Status: sudo systemctl status ${SERVICE_NAME}"
+echo "Logs:   journalctl -u ${SERVICE_NAME} -f"
 EOF
 
-chmod +x installer-full.sh
-git add installer-full.sh
-git commit -m "Add full interactive installer with systemd auto-start"
-git push origin main
+bash /tmp/installer-full.sh
